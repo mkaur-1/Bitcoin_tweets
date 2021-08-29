@@ -1,130 +1,149 @@
-import numpy as np 
-import pandas as pd 
-from textblob import TextBlob
-import matplotlib.pyplot as plt
-
-import os
-for dirname, _, filenames in os.walk('/kaggle/input'):
-    for filename in filenames:
-        print(os.path.join(dirname, filename))
-        file = '/kaggle/input/bitcoin-tweets-20160101-to-20190329/tweets.csv'
-df = pd.read_csv(file, sep=';',nrows=1300)
-print(df.head())
-data = df.drop(['replies','likes','retweets','timestamp','url','id','user','fullname'],axis = 1)
-data.reset_index(drop=True, inplace=True)
-data.head()
-tweets = data['text']
-print(tweets[2])
-pip install whatthelang
-from whatthelang import WhatTheLang
-
-wtl = WhatTheLang()
-L=[]
-for row in data['text']:
-    if len(row)!=0:
-        L.append(wtl.predict_lang(row))
-    else:
-        L.append(None)
-        
-data['lang'] = L
-data.head()
-data = data[data["lang"] == 'en']
-data.head()
-import nltk
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O
+import pandas as pd
+import numpy as np
 import re
-from nltk.corpus import stopwords
-
-def text_cleaning(text):
-    forbidden_words = set(stopwords.words('english'))
-    text = ' '.join(text.split('.'))
-    text = re.sub('\/',' ',text)
-    text = text.strip('\'"')
-    text = re.sub(r'@([^\s]+)',r'\1',text)
-    text = re.sub(r'\\',' ',text)
-    text = text.lower()
-    text = re.sub('[\s]+', ' ', text)
-    text = re.sub(r'#([^\s]+)', r'\1', text)
-    text = re.sub('((www\.[^\s]+)|(https?://[^\s]+))',' ',text)
-    text = re.sub(r'((http)\S+)','',text)
-    text = re.sub(r'\s+', ' ', re.sub('[^A-Za-z]', ' ', text.strip().lower())).strip()
-    text = re.sub(r'\W+', ' ', text.strip().lower()).strip()
-    text = [word for word in text.split() if word not in forbidden_words]
-    return ' '.join(text)
-
-data['text'] = data['text'].apply(lambda text: text_cleaning(text))
-data.sample(3)
+import matplotlib.pyplot as plt
 from textblob import TextBlob
+df = pd.read_csv("../input/bitcoin-tweets/Bitcoin_tweets.csv")
+df.head()
+df.dropna(subset=['hashtags'], inplace=True)
 
-def sentiment(txt):
-    return TextBlob(txt).sentiment.polarity
+df = df[['text']] 
+df.columns = ['tweets']
+df.head()
+import nltk
+from nltk.stem.wordnet import WordNetLemmatizer
 
-data['sentiment'] = data['text'].apply(lambda txt: sentiment(txt))      # new column of sentiment
+nltk.download('wordnet')
+nltk.download('stopwords')
+nltk.download('punkt')
+stop_words = nltk.corpus.stopwords.words(['english'])
 
-data.sample(10)
-data.to_csv('my_clean_tweets.csv', sep = ';',index = False)
 
-tweets=pd.read_csv('my_clean_tweets.csv', sep=';')
-tweets.sample(10)
-from numpy.random import RandomState
+print(stop_words)
+from nltk.tokenize import TweetTokenizer
+from nltk.stem.wordnet import WordNetLemmatizer
+lem = WordNetLemmatizer()
 
-rng = RandomState()
-train_data = tweets.sample(frac=0.8, random_state=rng)
-test_data = tweets.loc[~tweets.index.isin(train_data.index)]
-print('La taille des données d entrinement:',len(train_data))
-print('La taille des données de test:',len(test_data))
-import keras
+def cleaning(data):
+  #remove urls
+  tweet_without_url = re.sub(r'http\S+',' ', data)
+
+  #remove hashtags
+  tweet_without_hashtag = re.sub(r'#\w+', ' ', tweet_without_url)
+
+  #3. Remove mentions and characters that not in the English alphabets
+  tweet_without_mentions = re.sub(r'@\w+',' ', tweet_without_hashtag)
+  precleaned_tweet = re.sub('[^A-Za-z]+', ' ', tweet_without_mentions)
+
+    #2. Tokenize
+  tweet_tokens = TweetTokenizer().tokenize(precleaned_tweet)
+    
+    #3. Remove Puncs
+  tokens_without_punc = [w for w in tweet_tokens if w.isalpha()]
+    
+    #4. Removing Stopwords
+  tokens_without_sw = [t for t in tokens_without_punc if t not in stop_words]
+    
+    #5. lemma
+  text_cleaned = [lem.lemmatize(t) for t in tokens_without_sw]
+    
+    #6. Joining
+  return " ".join(text_cleaned)
+df['cleaned_tweets'] = df['tweets'].apply(cleaning)
+df.head()
+def getSubjectivity(tweet):
+  return TextBlob(tweet).sentiment.subjectivity
+
+def getPolarity(tweet):
+  return TextBlob(tweet).sentiment.polarity
+df['subjectivity'] = df['cleaned_tweets'].apply(getSubjectivity)
+df['polarity'] = df['cleaned_tweets'].apply(getPolarity)
+df.head()
+def getSentiment(score):
+  if score < 0:
+    return 'negative'
+  elif score == 0:
+    return 'neutral'
+  else:
+    return 'positive'
+df['sentiment'] = df['polarity'].apply(getSentiment)
+df.head()
 import tensorflow as tf
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import tensorflow.keras.layers as Layers
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.losses import SparseCategoricalCrossentropy
+from tensorflow.keras.optimizers import Adam
+from keras.layers import Dense, Dropout, Embedding, LSTM, Conv1D, GlobalMaxPooling1D, Bidirectional, SpatialDropout1D
+from keras.models import load_model
+
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+# Encode Categorical Variable
+X = df['cleaned_tweets']
+y = pd.get_dummies(df['sentiment']).values
+num_classes = df['sentiment'].nunique()
+seed = 101 # fix random seed for reproducibility
+np.random.seed(seed)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, 
+                                                    test_size=0.2,
+                                                    stratify=y,
+                                                    random_state=seed)
+print(X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+max_features = 20000
+tokenizer = Tokenizer(num_words=max_features)
+tokenizer.fit_on_texts(list(X_train))
+X_train = tokenizer.texts_to_sequences(X_train)
+X_test = tokenizer.texts_to_sequences(X_test)
+from keras.preprocessing import sequence
+max_words = 30
+X_train = sequence.pad_sequences(X_train, maxlen=max_words)
+X_test = sequence.pad_sequences(X_test, maxlen=max_words)
+print(X_train.shape,X_test.shape)
+import keras.backend as K
 from keras.models import Sequential
-from keras.layers import Dense,LSTM,Dropout,Activation,Embedding,Bidirectional
-max_features = 20000  # Only consider the top 20k words
-maxlen = 200
-train_data['flag'] = 'TRAIN'
-test_data['flag'] = 'TEST'
+from keras.layers import Dense,Embedding,Conv1D,MaxPooling1D,LSTM
+from sklearn.metrics import accuracy_score,confusion_matrix,classification_report
 
+batch_size = 128
+epochs = 5
 
-total_docs = pd.concat([train_data,test_data],axis = 0,ignore_index = True)
-phrases = total_docs['text'].tolist()
+max_features = 20000
+embed_dim = 100
 
-total_docs.sample(10)
-from keras.preprocessing.text import one_hot
-vocab_size = 50000
-encoded_phrases = [one_hot(d, vocab_size) for d in phrases]
-total_docs['Phrase'] = encoded_phrases
-train_data = total_docs[total_docs['flag'] == 'TRAIN']
-test_data = total_docs[total_docs['flag'] == 'TEST']
-x_train = train_data['Phrase']
-y_train = train_data['sentiment']
-x_val = test_data['Phrase']
-y_val = test_data['sentiment']
-print(total_docs['Phrase'][23])
-x_train = keras.preprocessing.sequence.pad_sequences(x_train, maxlen=maxlen)
-x_val = keras.preprocessing.sequence.pad_sequences(x_val, maxlen=maxlen)
+np.random.seed(seed)
+K.clear_session()
 model = Sequential()
-inputs = keras.Input(shape=(None,), dtype="int32")
-
-# Embed each integer in a 128-dimensional vector
-model.add(inputs)
-model.add(Embedding(50000, 32))
-model.add(LSTM(32, return_sequences=True))
-model.add(LSTM(32))
-
-# Add a classifier
-model.add(Dense(1, activation="sigmoid"))
-
+model.add(Embedding(max_features, embed_dim, input_length=X_train.shape[1]))
+model.add(Conv1D(filters=32, kernel_size=3, padding='same', activation='relu'))
+model.add(MaxPooling1D(pool_size=2))
+model.add(Conv1D(filters=32, kernel_size=3, padding='same', activation='relu'))
+model.add(MaxPooling1D(pool_size=2))    
+model.add(LSTM(100, dropout=0.2, recurrent_dropout=0.2))
+model.add(Dense(num_classes, activation='softmax'))
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 model.summary()
-model.compile(optimizer='rmsprop', 
-              loss='binary_crossentropy', 
-              metrics=["accuracy"])
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), 
+                          epochs=epochs, batch_size=batch_size, verbose=2)
+# predict class with test set
+y_pred_test =  np.argmax(model.predict(X_test), axis=1)
+print('Accuracy:\t{:0.1f}%'.format(accuracy_score(np.argmax(y_test,axis=1),y_pred_test)*100))
+print(classification_report(np.argmax(y_test,axis=1), y_pred_test))
+#confusion matrix
+confmat = confusion_matrix(np.argmax(y_test,axis=1), y_pred_test)
 
-model.fit(x_train, y_train, 
-          batch_size=128, 
-          epochs=20, 
-          validation_data=(x_val, y_val),
-          validation_steps=20)
-print('Test Loss: {}'.format(test_loss))
-print('Test Accuracy: {}'.format(test_acc))
+fig, ax = plt.subplots(figsize=(4, 4))
+ax.matshow(confmat, cmap=plt.cm.Blues, alpha=0.3)
+for i in range(confmat.shape[0]):
+  for j in range(confmat.shape[1]):
+    ax.text(x=j, y=i, s=confmat[i, j], va='center', ha='center')
+  plt.xlabel('Predicted label')
+  plt.ylabel('True label')
+  plt.tight_layout()
 
-sample_text = ('Bitcoin just lost half its value overnight. Sorry all you savvy investors ')
-vocab_size = 50000
-
-model.predict(one_hot(sample_text, vocab_size))
